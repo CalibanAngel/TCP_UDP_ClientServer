@@ -1,3 +1,5 @@
+# QUIEF Hippolyte - 50171350
+
 import socket
 import select
 import signal
@@ -50,6 +52,7 @@ class Server:
         inputs = [self.server_socket]
         self.outputs = []
         connected_client = 0
+
         while True:
             try:
                 (input_ready, output_ready, except_ready) = select.select(inputs, self.outputs, [], 1 * 10)  # select
@@ -62,7 +65,7 @@ class Server:
                 if intr == self.server_socket:
                     # Handle new client
                     (client_socket, client_address) = self.server_socket.accept()
-                    print('Connection requested from', client_address)
+                    # print('Connection requested from', client_address)
                     connected_client += 1
                     inputs.append(client_socket)
                     self.outputs.append(client_socket)
@@ -85,12 +88,13 @@ class Server:
                         else:
                             # Close leaving client
                             intr.close()
-                            inputs.remove(intr)
+                            inputs.remove(intr)  # Remove client form input and output and clients
                             self.outputs.remove(intr)
                             print("Client " +
                                   str(self.clients[intr]["id"]) +
                                   " disconnected. Number of connected clients = "
                                   + str(len(self.outputs)))
+                            del self.clients[intr]
                     except socket.error as err:
                         # close if error
                         inputs.remove(intr)
@@ -102,10 +106,16 @@ class Server:
         self.server_socket.close()
         for outp in self.outputs:
             # close every client
+            print("Client " +
+                  str(self.clients[outp]["id"]) +
+                  " disconnected. Number of connected clients = "
+                  + str(len(self.clients) - 1))
+            del self.clients[outp]
             outp.close()
-        sys.exit()
+        sys.exit(0)
 
     def __init__(self):
+        # init the server socket
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
