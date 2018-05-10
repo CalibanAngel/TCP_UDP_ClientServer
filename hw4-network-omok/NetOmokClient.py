@@ -2,9 +2,11 @@ import socket
 import argparse
 import sys
 import time
+import select
+import signal
 
 
-parser = argparse.ArgumentParser(description="Simple TCP client")
+parser = argparse.ArgumentParser(description="Omok game and chat")
 
 
 class Client:
@@ -22,7 +24,7 @@ class Client:
         print("Reply from server:", modified_message.decode("utf-8"))
 
     def pars(self):
-        inp = input("$> ")
+        inp = input()
         inp = inp.split(" ")
         cmd = ""
         msg = ""
@@ -37,13 +39,20 @@ class Client:
 
             if cmd == "\quit":
                 # check if exist
-                print("Bye bye~")
+                print("Cyaa~")
                 self.is_close = True
         return cmd, msg
 
     def prompt(self):
-        while self.is_close != True:
+        while not self.is_close:
             try:
+                r, w, x = select.select([sys.stdin, self.client_socket], [], [])
+            except select.error:
+                break
+            except socket.error:
+                break
+
+            if r[0] is sys.stdin:
                 cmd, msg = self.pars()
 
                 if len(cmd):
@@ -51,14 +60,18 @@ class Client:
                     # ["\list", "\w", "\board", "\play", "\ss", "\gg", "\quite"]:
                 else:
                     print("Please, enter a number between 1 and 5\n", file=sys.stderr)
-            except KeyboardInterrupt:
-                # CTRL-c catch
-                print("Cyaa~~")
-                self.client_socket.close()
-                sys.exit()
+            else:
+                self.receive()
         # close if exit
         self.client_socket.close()
         sys.exit()
+
+    def signal_handler(self, signum, frame):
+        # Handle CTRL-c
+        print("Cyaa~~")
+        # self.send("\quit")
+        self.client_socket.close()
+        sys.exit(0)
 
     def __init__(self, server_name, server_port, nickname):
         self.nickname = nickname
@@ -68,6 +81,7 @@ class Client:
         self.client_socket.connect((self.server_name, self.server_port))
         self.send("\\welcome " + self.nickname)
         print("The client is running on port", self.client_socket.getsockname()[1])
+        signal.signal(signal.SIGINT, self.signal_handler)
 
 
 def parsing():
