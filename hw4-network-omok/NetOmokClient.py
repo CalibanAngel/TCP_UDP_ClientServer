@@ -15,13 +15,19 @@ class Client:
     port_list = [21350, 31350, 41350, 51350]
     client_socket = None
     is_close = False
+    last_receive_cmd = ""
 
     def send(self, message):
         self.client_socket.send(message.encode("utf-8"))
 
     def receive(self):
-        modified_message = self.client_socket.recv(2048)
-        print("Reply from server:", modified_message.decode("utf-8"))
+        modified_message = self.client_socket.recv(2048).decode("utf-8")
+        modified_message = modified_message.split(" ", 1)
+        self.last_receive_cmd = modified_message[0]
+        if modified_message[0] in ["\play"]:
+            print("Reply from server:", modified_message[1])
+        else:
+            print("Reply from server:", modified_message[1])
 
     def pars(self):
         inp = input()
@@ -29,7 +35,12 @@ class Client:
         cmd = ""
         msg = ""
 
-        if len(inp) and len(inp[0]):
+        if self.last_receive_cmd in ["\play"]:
+            if len(inp) and len(inp[0]):
+                cmd = "\join"
+                if inp[0] in ["y", "n"]:
+                    msg = " ".join(inp)
+        elif len(inp) and len(inp[0]):
             if inp[0][0] == '\\':
                 cmd = inp[0]
                 msg = " ".join(inp[1:])

@@ -145,6 +145,9 @@ class Omok:
             return
         self.turn = (self.turn + 1) % 2
 
+    def reset(self):
+        pass
+
     def __init__(self):
         self.board = [[0 for row in range(self.ROW)] for col in range(self.COL)]
         x, y = None, None
@@ -153,10 +156,16 @@ class Omok:
 class Game:
     players = []
 
-    def __init__(self, client_1, client_2):
-        self.players.append(client_1)
-        self.players.append(client_2)
+    def set_player_1(self, client):
+        self.players[0] = client
+
+    def set_player_2(self, client):
+        self.players[1] = client
+
+    def __init__(self):
         self.game = Omok()
+        self.players.append(None)
+        self.players.append(None)
 
 
 class Client:
@@ -181,59 +190,81 @@ class Server:
     outputs = []
     inputs = []
     clients = []
+    game = None
 
-    def send(self, msg, sock):
-        sock.send((msg).encode("utf-8"))
+    def send(self, message, sock, cmd):
+        sock.send((cmd + " " + message).encode("utf-8"))
 
-    def broadcast(self, message):
+    def broadcast(self, message, cmd):
         for sock in self.outputs:
-            sock.send((message).encode("utf-8"))
+            sock.send((cmd + " " + message).encode("utf-8"))
 
-    def chat(self, message, client):
+    def chat(self, message, client, cmd):
         message = "[" + client.nickname + "]: " + message
-        self.broadcast(message)
+        self.broadcast(message, cmd)
 
-    def welcome(self, message, client):
+    def welcome(self, message, client, cmd):
         client.set_nickname(message)
         message = client.nickname + " has join the room"
         self.send("welcome " + client.nickname + " to net-omok chat room at " + "IP SOCKET" + ". You are " + str(client.id + 1) + "th user",
-                  client.socket)
-        self.broadcast(message)
+                  client.socket, cmd)
+        self.broadcast(message, cmd)
 
-    def nickname(self, message, client):
+    def nickname(self, message, client, cmd):
         old_nick = client.nickname
         client.set_nickname(message)
-        self.broadcast(old_nick + " is now named " + client.nickname)
+        self.broadcast(old_nick + " is now named " + client.nickname, cmd)
 
-    def list(self, message, client):
+    def list(self, message, client, cmd):
         msg = ""
         for idx, item in enumerate(self.clients):
             msg += str(idx) + ") " + item.display() + "\n"
-        self.send(msg, client.socket)
+        self.send(msg, client.socket, cmd)
 
-    def whisper(self, message, client):
+    def whisper(self, message, client, cmd):
         msg = message.split(" ", 1)
         w_client = find_client_by_nickname(self.clients, msg[0])
-        self.send("[whisper from" + client.nickname + "]: " + msg[1], w_client.socket)
-        self.send("[whisper to" + w_client.nickname + "]: " + msg[1], client.socket)
+        self.send("[whisper from" + client.nickname + "]: " + msg[1], w_client.socket, cmd)
+        self.send("[whisper to" + w_client.nickname + "]: " + msg[1], client.socket, cmd)
 
-    def board(self, message, client):  # TODO
+    def board(self, message, client, cmd):  # TODO
         pass
 
-    def ask_play(self, message, client):  # TODO
+    def ask_play(self, message, client, cmd):
+        if self.game:
+            self.send("A game is currently running, wait until it finish to create a new one", client.socket, cmd)
+        self.game = Game()
         w_client = find_client_by_nickname(self.clients, message)
-        self.broadcast(client.nickname + " asked to play to " + w_client.nickname)
-        self.send(client.nickname + " wants to play with you, agree? [y/n]", w_client.socket)
+        self.game.set_player_1(client)
+        self.broadcast(client.nickname + " asked to play to " + w_client.nickname, cmd)
+        self.send(client.nickname + " wants to play with you, agree? [y/n]", w_client.socket, cmd)
 
-    def surrender(self, message, client):  # TODO
+    def join(self, message, client, cmd):
+        if message in ["y", "n"] and self.game.players[0]:
+            if message == "y":
+                self.broadcast(client.nickname + " accepted to play with " + self.game.players[0].nickname, cmd)
+                self.game.set_player_2(client)
+            elif message == "n":
+                self.broadcast(self.game.players[0].nickname + " refused to play with " + client.nickname, cmd)
+                self.game = None
+        else:
+            self.send(self.game.players[0].nickname + " wants to play with you, agree? [y/n]", client.socket, "\play")
+
+    def surrender(self, message, client, cmd):
+        player_2 = None
+        if client.nickname == self.game.players[0].nickname:
+            player_2 = self.game.players[1]
+        else:
+            player_2 = self.game.players[0]
+        self.game = Game()
+        self.broadcast(client.nickname + " surrender ! " + player_2.nickname + " won the game !", cmd)
+
+    def play(self, message, client, cmd):  # TODO
         pass
 
-    def play(self, message, client):  # TODO
-        pass
-
-    def exit(self, message, client):
-        self.broadcast(client.nickname + " just leave")
-        self.send("Cyaa~", client.socket)
+    def exit(self, message, client, cmd):
+        self.broadcast(client.nickname + " just leave", cmd)
+        self.send("Cyaa~", client.socket, cmd)
         remove_client(self.clients, client)
 
     def pars_cmd(self, data, client):
@@ -251,6 +282,7 @@ class Server:
             "\w": self.whisper,
             "\\board": self.board,
             "\play": self.ask_play,
+            "\join": self.join,
             "\ss": self.play,
             "\gg": self.surrender,
             "\quit": self.exit,
@@ -258,7 +290,7 @@ class Server:
         if cmd not in cmd_list:
             return "Invalid command"
         func = cmd_list[cmd]
-        return func(msg, client)
+        return func(msg, client, cmd)
 
     def handle_new_client(self, intr, connected_client):
         (client_socket, client_address) = self.server_socket.accept()
