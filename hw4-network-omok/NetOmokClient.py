@@ -9,6 +9,8 @@ import signal
 parser = argparse.ArgumentParser(description="Omok game and chat")
 
 
+# TODO: Buffer
+
 class Client:
     server_name = "nsl2.cau.ac.kr"
     server_port = 21350

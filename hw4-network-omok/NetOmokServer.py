@@ -156,6 +156,7 @@ class Omok:
 
 class Game:
     players = []
+    turn_time = 10
 
     def is_player_turn(self, client):
         player_id = -1
@@ -164,7 +165,7 @@ class Game:
                 player_id = index
         return player_id == self.game.turn
 
-    def get_player_turn(self, client):
+    def get_player_turn(self):
         return self.players[self.game.turn]
 
     def is_player(self, client):
@@ -413,7 +414,13 @@ HELP:
 
         while True:
             if self.game:  # timer of the game
-                if self.game.how_long_game().total_seconds() >= 10 and not self.game.players[1]:
+                if self.game.how_long_game().total_seconds() >= self.game.turn_time and not self.game.players[1]:
+                    self.game = None
+                    self.broadcast("[server]: You can now start a new game")
+                if self.game.how_long_game().total_seconds() >= self.game.turn_time and self.game.players[1]:
+                    player = self.game.get_player_turn()
+                    player_2 = self.game.get_other_player()
+                    self.broadcast("[server]: " + player.nickname + " took to much to play, so he looses the game. " + player_2.nickname + " win !")
                     self.game = None
                     self.broadcast("[server]: You can now start a new game")
 
