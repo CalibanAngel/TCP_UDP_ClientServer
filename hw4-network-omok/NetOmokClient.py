@@ -23,11 +23,16 @@ class Client:
     def receive(self):
         modified_message = self.client_socket.recv(2048).decode("utf-8")
         modified_message = modified_message.split(" ", 1)
-        self.last_receive_cmd = modified_message[0]
-        if modified_message[0] in ["\play"]:
-            print("Reply from server:", modified_message[1])
+        if len(modified_message) and modified_message[0] in ["\play"]:
+            self.last_receive_cmd = modified_message[0]
+            print(modified_message[1])
+        elif len(modified_message) and len(modified_message[0]):
+            print(modified_message[1])
         else:
-            print("Reply from server:", modified_message[1])
+            print("Cyaa~~")
+            # self.send("\quit")
+            self.client_socket.close()
+            sys.exit(0)
 
     def pars(self):
         inp = input()
@@ -35,9 +40,10 @@ class Client:
         cmd = ""
         msg = ""
 
-        if self.last_receive_cmd in ["\play"]:
+        if self.last_receive_cmd == "\play":
             if len(inp) and len(inp[0]):
                 cmd = "\join"
+                self.last_receive_cmd = "\join"
                 if inp[0] in ["y", "n"]:
                     msg = " ".join(inp)
         elif len(inp) and len(inp[0]):
@@ -70,7 +76,7 @@ class Client:
                     self.send(cmd + " " + msg)
                     # ["\list", "\w", "\board", "\play", "\ss", "\gg", "\quite"]:
                 else:
-                    print("Please, enter a number between 1 and 5\n", file=sys.stderr)
+                    print("[tips]: user < \help > to know te different command\n", file=sys.stderr)
             else:
                 self.receive()
         # close if exit

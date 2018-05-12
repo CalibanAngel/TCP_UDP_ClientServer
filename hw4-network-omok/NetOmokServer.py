@@ -40,35 +40,36 @@ class Omok:
     win = 0
 
     def print_board(self):
-        print("   ", end="")
+        board = "   "
         for j in range(0, self.COL):
-            print("%2d" % j, end="")
+            board += ("%2d" % j)
 
-        print()
-        print("  ", end="")
+        board += "\n"
+        board += "  "
         for j in range(0, 2 * self.COL + 3):
-            print("-", end="")
+            board += "-"
 
-        print()
+        board += "\n"
         for i in range(0, self.ROW):
-            print("%d |" % i, end="")
+            board += ("%d |" % i)
             for j in range(0, self.COL):
                 c = self.board[i][j]
                 if c == 0:
-                    print(" +", end="")
+                    board += " +"
                 elif c == 1:
-                    print(" 0", end="")
+                    board += " 0"
                 elif c == 2:
-                    print(" @", end="")
+                    board += " @"
                 else:
-                    print("ERROR", end="")
-            print(" |")
+                    board += "ERROR"
+            board += " |\n"
 
-        print("  ", end="")
+        board += "  "
         for j in range(0, 2 * self.COL + 3):
-            print("-", end="")
+            board += "-"
 
-        print()
+        board += "\n"
+        return board
 
     def check_win(self, x, y):
         last_stone = self.board[x][y]
@@ -122,39 +123,64 @@ class Omok:
             return last_stone
         return 0
 
-    def play(self, x, y):
+    def play(self, x, y, player_name):
         if x < 0 or y < 0 or x >= self.ROW or y >= self.COL:
-            return "error, out of bound!"
+            return "[server]: error, out of bound!"
         elif self.board[x][y] != 0:
-            return "error, already used!"
+            return "[server]: error, already used!"
 
         if self.turn == 0:
             self.board[x][y] = 1
         else:
             self.board[x][y] = 2
 
-        # os.system("clear")
-        self.print_board()
-
         win = self.check_win(x, y)
         if win != 0:
-            return "player %d wins!" % win
+            return ""  # player_name win
 
         self.count += 1
         if self.count == self.ROW * self.COL:
-            return
+            return ""  # can play
         self.turn = (self.turn + 1) % 2
+        return ""
+
+    def is_win(self):
+        return self.win
 
     def reset(self):
         pass
 
     def __init__(self):
         self.board = [[0 for row in range(self.ROW)] for col in range(self.COL)]
-        x, y = None, None
 
 
 class Game:
     players = []
+
+    def is_player_turn(self, client):
+        player_id = -1
+        for index, item in enumerate(self.players):
+            if item.socket == client.socket:
+                player_id = index
+        return player_id == self.game.turn
+
+    def get_player_turn(self, client):
+        return self.players[self.game.turn]
+
+    def is_player(self, client):
+        if client.nickname == self.players[0].nickname or client.nickname == self.players[1].nickname:
+            return True
+        return False
+
+    def how_long_game(self):
+        return datetime.datetime.now() - self.time
+
+    def get_other_player(self, client):
+        if client.nickname == self.players[0].nickname:
+            return self.players[1]
+        elif client.nickname == self.players[1].nickname:
+            return self.players[0]
+        return None
 
     def set_player_1(self, client):
         self.players[0] = client
@@ -164,6 +190,7 @@ class Game:
 
     def __init__(self):
         self.game = Omok()
+        self.time = datetime.datetime.now()
         self.players.append(None)
         self.players.append(None)
 
@@ -192,81 +219,159 @@ class Server:
     clients = []
     game = None
 
+    # send message to sock user
     def send(self, message, sock, cmd):
         sock.send((cmd + " " + message).encode("utf-8"))
 
-    def broadcast(self, message, cmd):
+    # send message to all user
+    def broadcast(self, message):
         for sock in self.outputs:
-            sock.send((cmd + " " + message).encode("utf-8"))
+            sock.send(("\msg" + " " + message).encode("utf-8"))
 
+    # chat
     def chat(self, message, client, cmd):
         message = "[" + client.nickname + "]: " + message
-        self.broadcast(message, cmd)
+        self.broadcast(message)
 
+    # use when a user is connect for the first time
     def welcome(self, message, client, cmd):
         client.set_nickname(message)
-        message = client.nickname + " has join the room"
-        self.send("welcome " + client.nickname + " to net-omok chat room at " + "IP SOCKET" + ". You are " + str(client.id + 1) + "th user",
+        message = "[server]: " + client.nickname + " has join the room"
+        self.send("[server]: welcome %s to net-omok chat room at %s %s. You are %s th user" % (client.nickname, str(client.address[0]), str(client.address[1]), str(client.id + 1)),
                   client.socket, cmd)
-        self.broadcast(message, cmd)
+        self.help(message, client, '\help')
+        self.broadcast(message)
 
+    # change the nickname
     def nickname(self, message, client, cmd):
         old_nick = client.nickname
         client.set_nickname(message)
-        self.broadcast(old_nick + " is now named " + client.nickname, cmd)
+        self.broadcast("[server]: " + old_nick + " is now named " + client.nickname)
 
+    # get the list of all users
     def list(self, message, client, cmd):
-        msg = ""
+        msg = "[server]: \n"
         for idx, item in enumerate(self.clients):
             msg += str(idx) + ") " + item.display() + "\n"
         self.send(msg, client.socket, cmd)
 
+    # send a private message
     def whisper(self, message, client, cmd):
         msg = message.split(" ", 1)
         w_client = find_client_by_nickname(self.clients, msg[0])
+        if not w_client:  # check if user exist
+            self.send("[server]: Cannot find user " + message + ". Use < \list > to see the users", client.socket, "\msg")
+            return
         self.send("[whisper from" + client.nickname + "]: " + msg[1], w_client.socket, cmd)
         self.send("[whisper to" + w_client.nickname + "]: " + msg[1], client.socket, cmd)
 
-    def board(self, message, client, cmd):  # TODO
-        pass
+    # send the board to a specific user
+    def board(self, message, client, cmd):
+        self.send(self.game.game.print_board(), client.socket, cmd)
+        self.send("it's " + self.game.get_player_turn(client).nickname + " turn", client.socket, cmd)
 
+    # send the board to every users
+    def board_broadcast(self, client):
+        self.broadcast(self.game.game.print_board())
+        self.broadcast("[server]: it's " + self.game.get_player_turn(client).nickname + " turn")
+
+    # ask a user to play a game
     def ask_play(self, message, client, cmd):
-        if self.game:
-            self.send("A game is currently running, wait until it finish to create a new one", client.socket, cmd)
-        self.game = Game()
+        if self.game:  # check if a game is not start
+            self.send("[server]: Cannot make play request", client.socket, "\msg")
+            return
         w_client = find_client_by_nickname(self.clients, message)
-        self.game.set_player_1(client)
-        self.broadcast(client.nickname + " asked to play to " + w_client.nickname, cmd)
-        self.send(client.nickname + " wants to play with you, agree? [y/n]", w_client.socket, cmd)
+        if not w_client:  # check if user exist
+            self.send("[server]: Cannot find user " + message + ". Use < \list > to see the users", client.socket, "\msg")
+            return
+        self.game = Game()  # create a new game
+        self.game.set_player_1(client)  # set the first user of the game
+        self.broadcast("[server]: " + client.nickname + " asked to play to " + w_client.nickname)
+        self.send("[server]: " + client.nickname + " wants to play with you, agree? [y/n]", w_client.socket, cmd)
 
+    # answer of the asked-to-play user
     def join(self, message, client, cmd):
         if message in ["y", "n"] and self.game.players[0]:
             if message == "y":
-                self.broadcast(client.nickname + " accepted to play with " + self.game.players[0].nickname, cmd)
-                self.game.set_player_2(client)
+                self.broadcast("[server]: " + client.nickname + " accepted to play with " + self.game.players[0].nickname)
+                self.game.set_player_2(client)  # set the second user of the game
+                self.board_broadcast(client)  # send board to every user
             elif message == "n":
-                self.broadcast(self.game.players[0].nickname + " refused to play with " + client.nickname, cmd)
-                self.game = None
-        else:
-            self.send(self.game.players[0].nickname + " wants to play with you, agree? [y/n]", client.socket, "\play")
+                self.broadcast("[server]: " + self.game.players[0].nickname + " refused to play with " + client.nickname)
+                self.game = None  # destroy the game
+        else:  # if answer different from y or n
+            self.send("[server]: " + self.game.players[0].nickname + " wants to play with you, agree? [y/n]", client.socket, "\play")
 
+    # surrender the game
     def surrender(self, message, client, cmd):
-        player_2 = None
-        if client.nickname == self.game.players[0].nickname:
-            player_2 = self.game.players[1]
-        else:
-            player_2 = self.game.players[0]
-        self.game = Game()
-        self.broadcast(client.nickname + " surrender ! " + player_2.nickname + " won the game !", cmd)
+        if not self.game.is_player(client):  # check if the user is a player
+            self.send("[server]: you are not a player during this game", client.socket, cmd)
+            return
+        player_2 = self.game.get_other_player(client)  # get the other player
+        self.game = None  # destroy the game
+        self.broadcast("[server]: " + client.nickname + " surrender ! " + player_2.nickname + " won the game !")
 
-    def play(self, message, client, cmd):  # TODO
-        pass
+    # play a stone
+    def play(self, message, client, cmd):
+        if not self.game:  # check if the game exist
+            self.send("[server]: there is not game started, start one with < \play <nickname> >", client.socket, cmd)
+            return
+        if not self.game.is_player(client):  # check if the user is a player
+            self.send("[server]: you are not a player during this game", client.socket, cmd)
+            return
+        if not self.game.is_player_turn(client):  # check if the player can play
+            self.send("[server]: it's not your turn to play", client.socket, cmd)  # try to play when it's not your turn
+            return
+
+        cord = message.split()
+        if len(cord) != 2:  # check if coordinates are giver
+            self.send("[help]: \ss <x> <y> with <x> and <y> are number", client.socket, cmd)  # wrong command
+            return
+        try:  # check if coordinates are number
+            x = int(cord[0])
+            y = int(cord[1])
+        except ValueError:
+            self.send("[help]: \ss <x> <y> with <x> and <y> are number", client.socket, cmd)  # wrong command
+            return
+
+        msg = self.game.game.play(x, y, client.nickname)
+        if len(msg):  # check if can play
+            self.send(msg, client.socket, cmd)  # print if error
+            return
+
+        self.broadcast("[server]: " + client.nickname + " played on (" + cord[0] + ", " + cord[1] + ")")
+        self.board_broadcast(client)  # send to every users the play
+        if self.game.game.is_win():
+            player_2 = self.game.get_other_player(client)
+            self.broadcast("[server]: " + client.nickname + " win ! Don't cry " + player_2.nickname + ", you will won next time ;)\n End of the game, you can now start a new one")
+            self.game = None
+
+    # help command
+    def help(self, message, client, cmd):
+        msg = """
+HELP:
+    \help => show the list of command
+    \\nickname <username> => changer nickname
+    \list => show list of user
+    \w <username> <msg> => send private message to <username>
+    \\board => print the board
+    \play <username> => ask <username> to play
+    \ss <x> <y> => if you are playing, put a stone on (<x>, <y>)
+    \gg => if you are playing, you surrender
+    \quit => close the client
+        """
+        self.send(msg, client.socket, cmd)
 
     def exit(self, message, client, cmd):
-        self.broadcast(client.nickname + " just leave", cmd)
-        self.send("Cyaa~", client.socket, cmd)
+        self.inputs.remove(client.socket)
+        self.outputs.remove(client.socket)
         remove_client(self.clients, client)
+        self.broadcast("[server]: " + client.nickname + " just leave")
+        self.send("Cyaa~", client.socket, cmd)
+        client.socket.close()
 
+
+    # parse received command
     def pars_cmd(self, data, client):
         tmp = data.lstrip().split(' ', 1)
         cmd = tmp[0]
@@ -275,6 +380,7 @@ class Server:
             msg = tmp[1]
         # dictionary of server cmd --> no switch/case in Python :)
         cmd_list = {
+            "\help": self.help,
             "\msg": self.chat,
             "\welcome": self.welcome,
             "\\nickname": self.nickname,
@@ -288,16 +394,16 @@ class Server:
             "\quit": self.exit,
         }
         if cmd not in cmd_list:
-            return "Invalid command"
+            return "Invalid command, use < \help > for more detail"
         func = cmd_list[cmd]
         return func(msg, client, cmd)
 
+    # handle new connection
     def handle_new_client(self, intr, connected_client):
         (client_socket, client_address) = self.server_socket.accept()
         # print('Connection requested from', client_address)
         self.inputs.append(client_socket)
         self.outputs.append(client_socket)
-
         self.clients.append(Client(client_socket, client_address, connected_client))
 
     def serve(self):
@@ -306,8 +412,13 @@ class Server:
         connected_client = 0
 
         while True:
+            if self.game:  # timer of the game
+                if self.game.how_long_game().total_seconds() >= 10 and not self.game.players[1]:
+                    self.game = None
+                    self.broadcast("[server]: You can now start a new game")
+
             try:
-                (input_ready, output_ready, except_ready) = select.select(self.inputs, self.outputs, [], 1 * 10)  # select
+                (input_ready, output_ready, except_ready) = select.select(self.inputs, self.outputs, [], 1 * 1)  # select
             except select.error:
                 break
             except socket.error:
@@ -326,9 +437,9 @@ class Server:
                         if data:
                             # Send message
                             self.pars_cmd(data, client)
-                            # intr.send((msg + "\n").encode("utf-8"))
                         else:
                             # Close leaving client
+                            self.send("Server shutting down", intr, '\quit')
                             intr.close()
                             self.inputs.remove(intr)  # Remove client form input and output and clients
                             self.outputs.remove(intr)
@@ -345,7 +456,6 @@ class Server:
     def signal_handler(self, signum, frame):
         # Handle CTRL-c
         print("Shutting down server")
-        self.server_socket.close()
         for outp in self.outputs:
             # close every client
             client = find_client_by_socket(self.clients, outp)
@@ -354,6 +464,7 @@ class Server:
                   " disconnected. Number of connected clients = "
                   + str(len(self.clients) - 1))
             outp.close()
+        self.server_socket.close()
         sys.exit(0)
 
     def __init__(self):
