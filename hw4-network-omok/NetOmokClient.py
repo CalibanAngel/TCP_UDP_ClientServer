@@ -9,7 +9,24 @@ import signal
 parser = argparse.ArgumentParser(description="Omok game and chat")
 
 
-# TODO: Buffer
+class Buffer:
+    buf = ""
+    arr = []
+
+    def fill(self, string):
+        self.buf += string
+
+    def pars(self, separator):
+        self.arr = self.arr + self.buf.split(separator)
+        if not len(self.arr):
+            return None
+        ret = self.arr[0]
+        del self.arr[0]
+        return ret
+
+    def __init__(self):
+        pass
+
 
 class Client:
     server_name = "nsl2.cau.ac.kr"
@@ -23,18 +40,23 @@ class Client:
         self.client_socket.send(message.encode("utf-8"))
 
     def receive(self):
-        modified_message = self.client_socket.recv(2048).decode("utf-8")
+        buffer = Buffer()  # buffer if multiple packet receive
+        buffer.fill(self.client_socket.recv(2048).decode("utf-8"))
+
+        # modified_message = self.client_socket.recv(2048).decode("utf-8")
+        modified_message = buffer.pars("\r\n")
         modified_message = modified_message.split(" ", 1)
-        if len(modified_message) and modified_message[0] in ["\play"]:
-            self.last_receive_cmd = modified_message[0]
-            print(modified_message[1])
-        elif len(modified_message) and len(modified_message[0]):
-            print(modified_message[1])
-        else:
-            print("Cyaa~~")
-            # self.send("\quit")
-            self.client_socket.close()
-            sys.exit(0)
+        while modified_message and len(modified_message) and len(modified_message[0]):
+            if len(modified_message) and modified_message[0] == "\play":  # handle play event
+                self.last_receive_cmd = modified_message[0]
+                print(modified_message[1])
+            elif len(modified_message) and modified_message[0] == "\quit":  # handle quit event
+                print(modified_message[1])
+                self.is_close = True
+            elif len(modified_message) and len(modified_message[0]):  # print everything else
+                print(modified_message[1])
+            modified_message = buffer.pars("\r\n")
+            modified_message = modified_message.split(" ", 1)
 
     def pars(self):
         inp = input()
@@ -42,7 +64,7 @@ class Client:
         cmd = ""
         msg = ""
 
-        if self.last_receive_cmd == "\play":
+        if self.last_receive_cmd == "\play":  # special play handle
             if len(inp) and len(inp[0]):
                 cmd = "\join"
                 self.last_receive_cmd = "\join"
@@ -56,16 +78,12 @@ class Client:
                 cmd = '\msg'
                 msg = " ".join(inp)
 
-            if cmd == "\quit":
-                # check if exist
-                print("Cyaa~")
-                self.is_close = True
         return cmd, msg
 
     def prompt(self):
         while not self.is_close:
             try:
-                r, w, x = select.select([sys.stdin, self.client_socket], [], [])
+                r, w, x = select.select([sys.stdin, self.client_socket], [], [])  # select
             except select.error:
                 break
             except socket.error:
@@ -75,22 +93,20 @@ class Client:
                 cmd, msg = self.pars()
 
                 if len(cmd):
-                    self.send(cmd + " " + msg)
-                    # ["\list", "\w", "\board", "\play", "\ss", "\gg", "\quite"]:
+                    self.send(cmd + " " + msg)  # send the message
                 else:
                     print("[tips]: user < \help > to know te different command\n", file=sys.stderr)
             else:
                 self.receive()
-        # close if exit
-        self.client_socket.close()
-        sys.exit()
-
-    def signal_handler(self, signum, frame):
-        # Handle CTRL-c
-        print("Cyaa~~")
-        # self.send("\quit")
+        # close if quit
         self.client_socket.close()
         sys.exit(0)
+
+    # Handle CTRL-c
+    def signal_handler(self, signum, frame):
+        self.send("\quit")  # send quit cmd
+        self.receive()  # receive response
+        self.is_close = True
 
     def __init__(self, server_name, server_port, nickname):
         self.nickname = nickname

@@ -5,6 +5,7 @@ import select
 import signal
 import sys
 import datetime
+import re
 
 
 def remove_client(clients, client):
@@ -30,6 +31,18 @@ def find_client_by_socket(clients, c_socket):
         if item.socket == c_socket:
             client = item
     return client
+
+
+def duplicate_nickname(clients, nickname):
+    for index, item in enumerate(clients):
+        if item.nickname == nickname:
+            return True
+    return False
+
+
+def is_valid_nickname(nickname):
+    pattern = re.compile("[a-zA-Z]{3,64}")
+    return pattern.fullmatch(nickname)
 
 
 class Omok:
@@ -134,8 +147,8 @@ class Omok:
         else:
             self.board[x][y] = 2
 
-        win = self.check_win(x, y)
-        if win != 0:
+        self.win = self.check_win(x, y)
+        if self.win != 0:
             return ""  # player_name win
 
         self.count += 1
@@ -145,6 +158,7 @@ class Omok:
         return ""
 
     def is_win(self):
+        print("win: ", str(self.win))
         return self.win
 
     def reset(self):
@@ -183,6 +197,9 @@ class Game:
             return self.players[0]
         return None
 
+    def set_time(self):
+        self.time = datetime.datetime.now()
+
     def set_player_1(self, client):
         self.players[0] = client
 
@@ -219,15 +236,16 @@ class Server:
     inputs = []
     clients = []
     game = None
+    max_client = 8
 
     # send message to sock user
     def send(self, message, sock, cmd):
-        sock.send((cmd + " " + message).encode("utf-8"))
+        sock.send((cmd + " " + message + "\r\n").encode("utf-8"))
 
     # send message to all user
     def broadcast(self, message):
         for sock in self.outputs:
-            sock.send(("\msg" + " " + message).encode("utf-8"))
+            sock.send(("\msg" + " " + message + "\r\n").encode("utf-8"))
 
     # chat
     def chat(self, message, client, cmd):
@@ -236,15 +254,23 @@ class Server:
 
     # use when a user is connect for the first time
     def welcome(self, message, client, cmd):
+        if duplicate_nickname(self.clients, message) or is_valid_nickname(message) is None:
+            self.send("[server]: nickname already use, please use only between 3 and 64 alphabetical characters", client.socket, "\msg")
+            self.exit(message, client, "\quit")
+            return
         client.set_nickname(message)
+        print(message + " connected. There are " + str(len(self.clients)) + " users now")
         message = "[server]: " + client.nickname + " has join the room"
-        self.send("[server]: welcome %s to net-omok chat room at %s %s. You are %s th user" % (client.nickname, str(client.address[0]), str(client.address[1]), str(client.id + 1)),
+        self.send("[server]: welcome %s to net-omok chat room at %s %s. You are %s th user" % (client.nickname, str(socket.gethostbyname(socket.gethostname())), str(self.server_port), str(client.id + 1)),
                   client.socket, cmd)
         self.help(message, client, '\help')
         self.broadcast(message)
 
     # change the nickname
     def nickname(self, message, client, cmd):
+        if duplicate_nickname(self.clients, message) or is_valid_nickname(message) is None:
+            self.send("[server]: nickname already use, please use only between 3 and 64 alphabetical characters", client.socket, "\msg")
+            return
         old_nick = client.nickname
         client.set_nickname(message)
         self.broadcast("[server]: " + old_nick + " is now named " + client.nickname)
@@ -268,13 +294,16 @@ class Server:
 
     # send the board to a specific user
     def board(self, message, client, cmd):
+        if not self.game:  # check if the game exist
+            self.send("[server]: there is not game started, start one with < \play <nickname> >", client.socket, cmd)
+            return
         self.send(self.game.game.print_board(), client.socket, cmd)
-        self.send("it's " + self.game.get_player_turn(client).nickname + " turn", client.socket, cmd)
+        self.send("it's " + self.game.get_player_turn().nickname + " turn", client.socket, cmd)
 
     # send the board to every users
     def board_broadcast(self, client):
         self.broadcast(self.game.game.print_board())
-        self.broadcast("[server]: it's " + self.game.get_player_turn(client).nickname + " turn")
+        self.broadcast("[server]: it's " + self.game.get_player_turn().nickname + " turn")
 
     # ask a user to play a game
     def ask_play(self, message, client, cmd):
@@ -292,11 +321,15 @@ class Server:
 
     # answer of the asked-to-play user
     def join(self, message, client, cmd):
+        if not self.game:  # check if the game exist
+            self.send("[server]: there is not game started, start one with < \play <nickname> >", client.socket, cmd)
+            return
         if message in ["y", "n"] and self.game.players[0]:
             if message == "y":
                 self.broadcast("[server]: " + client.nickname + " accepted to play with " + self.game.players[0].nickname)
                 self.game.set_player_2(client)  # set the second user of the game
                 self.board_broadcast(client)  # send board to every user
+                self.game.set_time()
             elif message == "n":
                 self.broadcast("[server]: " + self.game.players[0].nickname + " refused to play with " + client.nickname)
                 self.game = None  # destroy the game
@@ -305,6 +338,9 @@ class Server:
 
     # surrender the game
     def surrender(self, message, client, cmd):
+        if not self.game:  # check if the game exist
+            self.send("[server]: there is not game started, start one with < \play <nickname> >", client.socket, cmd)
+            return
         if not self.game.is_player(client):  # check if the user is a player
             self.send("[server]: you are not a player during this game", client.socket, cmd)
             return
@@ -317,6 +353,7 @@ class Server:
         if not self.game:  # check if the game exist
             self.send("[server]: there is not game started, start one with < \play <nickname> >", client.socket, cmd)
             return
+        self.game.set_time()
         if not self.game.is_player(client):  # check if the user is a player
             self.send("[server]: you are not a player during this game", client.socket, cmd)
             return
@@ -344,7 +381,7 @@ class Server:
         self.board_broadcast(client)  # send to every users the play
         if self.game.game.is_win():
             player_2 = self.game.get_other_player(client)
-            self.broadcast("[server]: " + client.nickname + " win ! Don't cry " + player_2.nickname + ", you will won next time ;)\n End of the game, you can now start a new one")
+            self.broadcast("[server]: " + client.nickname + " win ! Don't cry " + player_2.nickname + ", you will won next time ;) End of the game, you can now start a new one")
             self.game = None
 
     # help command
@@ -364,12 +401,17 @@ HELP:
         self.send(msg, client.socket, cmd)
 
     def exit(self, message, client, cmd):
+        remove_client(self.clients, client)
+        self.send("[server]: Cyaa~", client.socket, cmd)
         self.inputs.remove(client.socket)
         self.outputs.remove(client.socket)
-        remove_client(self.clients, client)
-        self.broadcast("[server]: " + client.nickname + " just leave")
-        self.send("Cyaa~", client.socket, cmd)
         client.socket.close()
+        self.broadcast("[server]: " + client.nickname + " just leave")
+        print("Client " +
+              str(client.nickname) +
+              " disconnected. Number of connected clients = "
+              + str(len(self.clients)))
+
 
 
     # parse received command
@@ -402,6 +444,10 @@ HELP:
     # handle new connection
     def handle_new_client(self, intr, connected_client):
         (client_socket, client_address) = self.server_socket.accept()
+        if len(self.clients) == self.max_client:
+            self.send("[server]: Cannot connect, too much user", client_socket, "\quit")
+            client_socket.close()
+            return
         # print('Connection requested from', client_address)
         self.inputs.append(client_socket)
         self.outputs.append(client_socket)
@@ -417,9 +463,9 @@ HELP:
                 if self.game.how_long_game().total_seconds() >= self.game.turn_time and not self.game.players[1]:
                     self.game = None
                     self.broadcast("[server]: You can now start a new game")
-                if self.game.how_long_game().total_seconds() >= self.game.turn_time and self.game.players[1]:
+                elif self.game.how_long_game().total_seconds() >= self.game.turn_time and self.game.players[1]:  # timer of the play
                     player = self.game.get_player_turn()
-                    player_2 = self.game.get_other_player()
+                    player_2 = self.game.get_other_player(player)
                     self.broadcast("[server]: " + player.nickname + " took to much to play, so he looses the game. " + player_2.nickname + " win !")
                     self.game = None
                     self.broadcast("[server]: You can now start a new game")
@@ -466,6 +512,7 @@ HELP:
         for outp in self.outputs:
             # close every client
             client = find_client_by_socket(self.clients, outp)
+            self.send("[server]: Server disconnected", client.socket, "\quit")
             print("Client " +
                   str(client.nickname) +
                   " disconnected. Number of connected clients = "
