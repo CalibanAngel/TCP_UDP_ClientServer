@@ -6,27 +6,24 @@ import threading
 import signal
 import pickle
 from enum import Enum
+import time
 
 parser = argparse.ArgumentParser(description="Peer-to-peer chat")
 server_t = None
-ui_t = None
 
 
 class SignalHandler:
     # The stop event that's shared by this handler and threads.
     stopper = None
 
-    def __init__(self, stopper, lock):
+    def __init__(self, stopper):
         self.stopper = stopper
-        self.lock = lock
 
     def __call__(self, signum, frame):
-        # Get the threads
         global server_t
-        global ui_t
 
         self.stopper.set()  # Send the event
-        ui_t.kill()
+        server_t.kill()
 
 
 def parsing():
@@ -124,7 +121,9 @@ class Client:
         self.client_type = client_type
 
 
-class Server(threading.Thread):
+class Server:
+    inputs = [sys.stdin]
+    outputs = []
     buffer_size = 1024
     last_packets = []
     clients = []
@@ -134,6 +133,8 @@ class Server(threading.Thread):
         self.running = False
         self.broadcast(nodes[self.node_id].nickname, "EXIT")
         self.server_socket.close()
+        self.outputs = []
+        self.inputs = []
 
     def send(self, message, cmd, node):
         if self.server_socket.fileno() == -1:
@@ -160,12 +161,16 @@ class Server(threading.Thread):
     def receive_from(self, sock):
         if self.server_socket.fileno() == -1:
             return
-        (data, client_address) = sock.recvfrom(self.buffer_size)
+        try:
+            (data, client_address) = sock.recvfrom(self.buffer_size)
+        except:
+            print("timeout")
+            return None
         packet = None
         if data:
             packet = pickle.loads(data)
             packet = Packet(packet["cmd"], packet["sender"], packet["data"], packet["id"], packet["creator"])
-            # print("[packet]: ", packet.cmd, packet.sender, packet.data, packet.creator)
+            # print("[packet]: cmd", packet.cmd, "sender", packet.sender, "data", packet.data, "id", packet.id, "creator", packet.creator)
         return packet
 
     def is_new_packet(self, packet):
@@ -174,7 +179,7 @@ class Server(threading.Thread):
         for old in self.last_packets:
             if old.id == packet.id and old.creator == packet.creator:
                 return False
-            return True
+        return True
 
     def exit(self, packet):
         (id, client) = find_client_by_id(self.clients, packet.creator)
@@ -194,14 +199,12 @@ class Server(threading.Thread):
         print("[server]: connection refused by " + packet.data)
 
     def receive_message(self, packet):
-        # print("receive_message")
         if self.is_new_packet(packet):
             self.last_packets.append(packet)
             print(packet.data)
             self.transfer_packet(packet)
 
     def handle_connection(self, packet):
-        print(not is_client(self.clients, packet.creator))
         if count_handled_client(self.clients) < 2 and not is_client(self.clients, packet.creator):
             # print("handle connection", packet.sender)
             nodes[packet.creator].set_nickname(packet.data)
@@ -235,18 +238,37 @@ class Server(threading.Thread):
 
     def run(self):
         self.init_connection()
+        self.inputs.append(self.server_socket)
+        self.outputs.append(self.server_socket)
         while not self.stopper.is_set() or self.running:
-            packet = self.receive_from(self.server_socket)
-            if packet and self.running:
-                self.parse_cmd(packet)
-            elif not packet:
-                self.kill()
+            try:
+                r, w, x = select.select(self.inputs, [self.server_socket], [])
+            except:
                 break
+
+            for intr in r:
+                if intr == self.server_socket:
+                    packet = self.receive_from(self.server_socket)
+                    if packet and self.running:
+                        self.parse_cmd(packet)
+                    elif not packet:
+                        self.kill()
+                        break
+                elif intr == sys.stdin:
+                    line = input()
+
+                    if line:
+                        if line.split()[0] == "\quit":
+                            self.kill()
+                            break
+                        elif line.split()[0] == "\connect":
+                            self.init_connection()
+                        else:
+                            self.broadcast("[" + self.nickname + "]: " + line, "MSG")
         print("Shutting down server")
         sys.exit(0)
 
     def __init__(self, nickname, server_name, node_id, stopper):
-        super().__init__()
         self.stopper = stopper
         self.running = True
         self.nickname = nickname
@@ -260,51 +282,16 @@ class Server(threading.Thread):
         except socket.error as msg:
             print("Bind failed.", str(msg), file=sys.stderr)
             sys.exit()
+        self.server_socket.settimeout(5)
         print("The server is ready to receive on port", nodes[self.node_id].port)
-
-
-class UI:
-    def kill(self):
-        self.running = False
-        self.server.kill()
-        sys.exit()
-
-    def connect(self):
-        self.server.init_connection()
-
-    def run(self):
-        while not self.stopper.is_set() or self.running:
-            try:
-                line = input()
-            except:
-                break
-
-            if line:
-                if line.split()[0] == "\quit":
-                    self.kill()
-                    break
-                elif line.split()[0] == "\connect":
-                    self.connect()
-                else:
-                    self.server.broadcast("[" + self.nickname + "]: " + line, "MSG")
-            else:
-                break
-        sys.exit(0)
-
-    def __init__(self, nickname, server, stopper):
-        self.stopper = stopper
-        self.running = True
-        self.nickname = nickname
-        self.server = server
 
 
 def main():
     global server_t
-    global ui_t
+    # global ui_t
 
     stopper = threading.Event()  # Create event to handle ctrl-c
-    lock = threading.Lock()  # Create mutex to access threads
-    handler = SignalHandler(stopper, lock)  # Handle ctrl-c
+    handler = SignalHandler(stopper)  # Handle ctrl-c
     signal.signal(signal.SIGINT, handler)
 
     parsing()
@@ -313,10 +300,7 @@ def main():
         node.set_ip(args.serverName)
     nodes[str(args.nodeId)].set_nickname(args.nickname)
     server_t = Server(args.nickname, args.serverName, args.nodeId, stopper)
-    ui_t = UI(args.nickname, server_t, stopper)
-
-    server_t.start()
-    ui_t.run()
+    server_t.run()
     return 0
 
 
