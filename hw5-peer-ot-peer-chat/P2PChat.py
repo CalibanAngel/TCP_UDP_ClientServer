@@ -12,6 +12,23 @@ server_t = None
 ui_t = None
 
 
+class SignalHandler:
+    # The stop event that's shared by this handler and threads.
+    stopper = None
+
+    def __init__(self, stopper, lock):
+        self.stopper = stopper
+        self.lock = lock
+
+    def __call__(self, signum, frame):
+        # Get the threads
+        global server_t
+        global ui_t
+
+        self.stopper.set()  # Send the event
+        ui_t.kill()
+
+
 def parsing():
     parser.add_argument("nodeId",
                         help="your id on the server, must be a number 1 and 4",
@@ -34,6 +51,11 @@ def find_client_by_id(clients, node_id):
         if client.node.port == nodes[node_id].port:
             return key, client
     return -1, None
+
+
+def is_client(clients, node_id):
+    (idx, client) = find_client_by_id(clients, node_id)
+    return idx != -1
 
 
 def count_handled_client(clients):
@@ -109,9 +131,8 @@ class Server(threading.Thread):
     packet_id = 0
 
     def kill(self):
-        self.broadcast(nodes[self.node_id].nickname, "EXIT")
-        print("EXIT")
         self.running = False
+        self.broadcast(nodes[self.node_id].nickname, "EXIT")
         self.server_socket.close()
 
     def send(self, message, cmd, node):
@@ -130,9 +151,22 @@ class Server(threading.Thread):
             self.server_socket.sendto(packet.serialize(), (client.node.ip, client.node.port))
 
     def transfer_packet(self, packet):
+        if self.server_socket.fileno() == -1:
+            return
         packet.sender = self.node_id
         for client in self.clients:
             self.server_socket.sendto(packet.serialize(), (client.node.ip, client.node.port))
+
+    def receive_from(self, sock):
+        if self.server_socket.fileno() == -1:
+            return
+        (data, client_address) = sock.recvfrom(self.buffer_size)
+        packet = None
+        if data:
+            packet = pickle.loads(data)
+            packet = Packet(packet["cmd"], packet["sender"], packet["data"], packet["id"], packet["creator"])
+            # print("[packet]: ", packet.cmd, packet.sender, packet.data, packet.creator)
+        return packet
 
     def is_new_packet(self, packet):
         if len(self.last_packets) == 0:
@@ -141,15 +175,6 @@ class Server(threading.Thread):
             if old.id == packet.id and old.creator == packet.creator:
                 return False
             return True
-
-    def receive_from(self, sock):
-        (data, client_address) = sock.recvfrom(self.buffer_size)
-        packet = None
-        if data:
-            packet = pickle.loads(data)
-            packet = Packet(packet["cmd"], packet["sender"], packet["data"], packet["id"], packet["creator"])
-        # print("[packet]: ", packet["cmd"], packet["sender"], packet["data"], packet["creator"])
-        return packet
 
     def exit(self, packet):
         (id, client) = find_client_by_id(self.clients, packet.creator)
@@ -176,12 +201,13 @@ class Server(threading.Thread):
             self.transfer_packet(packet)
 
     def handle_connection(self, packet):
-        if count_handled_client(self.clients) < 2:
+        print(not is_client(self.clients, packet.creator))
+        if count_handled_client(self.clients) < 2 and not is_client(self.clients, packet.creator):
             # print("handle connection", packet.sender)
             nodes[packet.creator].set_nickname(packet.data)
             self.clients.append(Client(nodes[packet.creator], ClientType.HANDLED))
             self.send(self.nickname, "CONNECT", nodes[packet.creator])
-            print("[server]: connection establish with " + packet.data)
+            print("[server]: connection establish by " + packet.data)
             return
         self.send(self.nickname, "NOT_CONNECT", nodes[packet.creator])
         print("[server]: connection refused to " + packet.data)
@@ -203,23 +229,20 @@ class Server(threading.Thread):
 
     def init_connection(self):
         for node_id, node in nodes.items():
-            if node_id != self.node_id and count_init_client(self.clients) < 2 and node.ip and node.port:
+            if node_id != self.node_id and count_init_client(self.clients) < 2 and node.ip and node.port and not is_client(self.clients, node_id):
                 # print("init connection", node_id)
                 self.send(self.nickname, "ASK_CONNECT", node)
 
     def run(self):
         self.init_connection()
         while not self.stopper.is_set() or self.running:
-            try:
-                packet = self.receive_from(self.server_socket)
-                if packet:
-                    self.parse_cmd(packet)
-                # elif not packet:
-                #     print("test")
-                #     self.kill()
-            except:
+            packet = self.receive_from(self.server_socket)
+            if packet and self.running:
+                self.parse_cmd(packet)
+            elif not packet:
                 self.kill()
                 break
+        print("Shutting down server")
         sys.exit(0)
 
     def __init__(self, nickname, server_name, node_id, stopper):
@@ -244,17 +267,19 @@ class UI:
     def kill(self):
         self.running = False
         self.server.kill()
+        sys.exit()
 
     def connect(self):
         self.server.init_connection()
 
     def run(self):
         while not self.stopper.is_set() or self.running:
-            line = input()
-            print("jacky", line)
+            try:
+                line = input()
+            except:
+                break
 
             if line:
-                print("jacky", line)
                 if line.split()[0] == "\quit":
                     self.kill()
                     break
@@ -262,7 +287,8 @@ class UI:
                     self.connect()
                 else:
                     self.server.broadcast("[" + self.nickname + "]: " + line, "MSG")
-        print("ui exit")
+            else:
+                break
         sys.exit(0)
 
     def __init__(self, nickname, server, stopper):
@@ -270,29 +296,6 @@ class UI:
         self.running = True
         self.nickname = nickname
         self.server = server
-        self.run()
-
-
-class SignalHandler:
-    # The stop event that's shared by this handler and threads.
-    stopper = None
-
-    def __init__(self, stopper, lock):
-        self.stopper = stopper
-        self.lock = lock
-
-    def __call__(self, signum, frame):
-        # Get the threads
-        global server_t
-        global ui_t
-
-        self.stopper.set()  # Send the event
-        print("signal", ui_t)
-        if ui_t:
-            ui_t.kill()
-        else:
-            sys.exit()
-        print("Shutting down server")
 
 
 def main():
@@ -311,10 +314,9 @@ def main():
     nodes[str(args.nodeId)].set_nickname(args.nickname)
     server_t = Server(args.nickname, args.serverName, args.nodeId, stopper)
     ui_t = UI(args.nickname, server_t, stopper)
-    print("tmp", ui_t)
 
     server_t.start()
-    server_t.join()
+    ui_t.run()
     return 0
 
 
