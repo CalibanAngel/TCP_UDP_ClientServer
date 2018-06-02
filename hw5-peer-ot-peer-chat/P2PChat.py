@@ -12,24 +12,6 @@ server_t = None
 ui_t = None
 
 
-class SignalHandler:
-    # The stop event that's shared by this handler and threads.
-    stopper = None
-
-    def __init__(self, stopper, lock):
-        self.stopper = stopper
-        self.lock = lock
-
-    def __call__(self, signum, frame):
-        # Get the threads
-        global server_t
-        global ui_t
-
-        self.stopper.set()  # Send the event
-        ui_t.kill()
-        print("Shutting down server")
-
-
 def parsing():
     parser.add_argument("nodeId",
                         help="your id on the server, must be a number 1 and 4",
@@ -133,11 +115,15 @@ class Server(threading.Thread):
         self.server_socket.close()
 
     def send(self, message, cmd, node):
+        if self.server_socket.fileno() == -1:
+            return
         packet = Packet(cmd, self.node_id, message, self.packet_id, self.node_id)
         self.packet_id += 1
         self.server_socket.sendto(packet.serialize(), (node.ip, node.port))
 
     def broadcast(self, message, cmd):
+        if self.server_socket.fileno() == -1:
+            return
         packet = Packet(cmd, self.node_id, message, self.packet_id, self.node_id)
         self.packet_id += 1
         for client in self.clients:
@@ -225,21 +211,15 @@ class Server(threading.Thread):
         self.init_connection()
         while not self.stopper.is_set() or self.running:
             try:
-                (input_ready, output_ready, except_ready) = select.select([self.server_socket], [self.server_socket], [], 1 * 1)  # select
+                packet = self.receive_from(self.server_socket)
+                if packet:
+                    self.parse_cmd(packet)
+                # elif not packet:
+                #     print("test")
+                #     self.kill()
             except:
+                self.kill()
                 break
-
-            for intr in input_ready:
-                try:
-                    packet = self.receive_from(self.server_socket)
-                    if packet:
-                        self.parse_cmd(packet)
-                    # elif not packet:
-                    #     print("test")
-                    #     self.kill()
-                except socket.error:
-                    self.kill()
-                    break
         sys.exit(0)
 
     def __init__(self, nickname, server_name, node_id, stopper):
@@ -258,39 +238,61 @@ class Server(threading.Thread):
             print("Bind failed.", str(msg), file=sys.stderr)
             sys.exit()
         print("The server is ready to receive on port", nodes[self.node_id].port)
-        # self.run()
 
 
-class UI(threading.Thread):
+class UI:
     def kill(self):
         self.running = False
         self.server.kill()
-        sys.stdin.close()
+
+    def connect(self):
+        self.server.init_connection()
 
     def run(self):
         while not self.stopper.is_set() or self.running:
-            try:
-                while sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
-                    line = sys.stdin.readline()
-                    if line:
-                        if line.split()[0] == "\quit":
-                            self.kill()
-                            break
-                        else:
-                            self.server.broadcast("[" + self.nickname + "]: " + line, "MSG")
-                    else:  # an empty line means stdin has been closed
-                        self.kill()
-                        break
-            except:
-                break
+            line = input()
+            print("jacky", line)
+
+            if line:
+                print("jacky", line)
+                if line.split()[0] == "\quit":
+                    self.kill()
+                    break
+                elif line.split()[0] == "\connect":
+                    self.connect()
+                else:
+                    self.server.broadcast("[" + self.nickname + "]: " + line, "MSG")
+        print("ui exit")
         sys.exit(0)
 
     def __init__(self, nickname, server, stopper):
-        super().__init__()
         self.stopper = stopper
         self.running = True
         self.nickname = nickname
         self.server = server
+        self.run()
+
+
+class SignalHandler:
+    # The stop event that's shared by this handler and threads.
+    stopper = None
+
+    def __init__(self, stopper, lock):
+        self.stopper = stopper
+        self.lock = lock
+
+    def __call__(self, signum, frame):
+        # Get the threads
+        global server_t
+        global ui_t
+
+        self.stopper.set()  # Send the event
+        print("signal", ui_t)
+        if ui_t:
+            ui_t.kill()
+        else:
+            sys.exit()
+        print("Shutting down server")
 
 
 def main():
@@ -309,11 +311,10 @@ def main():
     nodes[str(args.nodeId)].set_nickname(args.nickname)
     server_t = Server(args.nickname, args.serverName, args.nodeId, stopper)
     ui_t = UI(args.nickname, server_t, stopper)
+    print("tmp", ui_t)
 
     server_t.start()
-    ui_t.start()
     server_t.join()
-    ui_t.join()
     return 0
 
 
